@@ -22,7 +22,30 @@ interface Signal {
   alpha: number;
 }
 
+interface FieldParticle {
+  seed: number;
+  orbit: number;
+  drift: number;
+  size: number;
+  alpha: number;
+  color: string;
+}
+
 const branchOrder = ['ref-buddy', 'harvestingpro', 'league-hub'] as const;
+const backgroundPalette = ['#fff7ed', '#fbbf7a', '#ff7a1a', '#6ee79a', '#b98cff'];
+const fieldParticles: FieldParticle[] = Array.from({ length: 142 }, (_, index) => ({
+  seed: index * 17.831,
+  orbit: 0.08 + seededUnit(index, 1) * 0.86,
+  drift: 0.45 + seededUnit(index, 2) * 1.35,
+  size: 0.7 + seededUnit(index, 3) * 1.8,
+  alpha: 0.12 + seededUnit(index, 4) * 0.24,
+  color: backgroundPalette[index % backgroundPalette.length],
+}));
+
+function seededUnit(index: number, salt = 0): number {
+  const value = Math.sin(index * 127.1 + salt * 311.7) * 43758.5453123;
+  return value - Math.floor(value);
+}
 
 function getLogoUrl(website?: string): string | undefined {
   if (!website) return undefined;
@@ -245,31 +268,122 @@ function NetworkOnly() {
       }));
     };
 
-    const drawBackground = () => {
-      ctx.fillStyle = '#0a0a0b';
+    const drawBackground = (nodeMap: Map<string, RenderNode>) => {
+      ctx.fillStyle = '#050506';
       ctx.fillRect(0, 0, width, height);
 
       ctx.save();
-      ctx.globalAlpha = 0.16;
-      ctx.strokeStyle = '#f97316';
-      ctx.lineWidth = 1;
-      for (let x = ((frame * 0.13) % 76) - 76; x < width + 76; x += 76) {
+      ctx.globalCompositeOperation = 'screen';
+      nodesRef.current
+        .filter((node) => node.kind !== 'client')
+        .forEach((node) => {
+          const scale = node.kind === 'root' ? 0.38 : 0.25;
+          const glowRadius = Math.max(width, height) * scale;
+          const gradient = ctx.createRadialGradient(node.x, node.y, 0, node.x, node.y, glowRadius);
+          gradient.addColorStop(0, `${node.color}24`);
+          gradient.addColorStop(0.26, `${node.color}10`);
+          gradient.addColorStop(1, `${node.color}00`);
+          ctx.fillStyle = gradient;
+          ctx.fillRect(0, 0, width, height);
+        });
+      ctx.restore();
+
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      const root = nodeMap.get('jd-builds');
+      const rootX = root?.x ?? width / 2;
+      const rootY = root?.y ?? height / 2;
+      const fieldCount = width < 760 ? 18 : 28;
+
+      for (let strand = 0; strand < fieldCount; strand += 1) {
+        const color = backgroundPalette[strand % backgroundPalette.length];
+        const baseY = height * (0.09 + seededUnit(strand, 6) * 0.82);
+        const phase = frame * (0.0024 + seededUnit(strand, 7) * 0.0022) + strand * 0.71;
+        const amplitude = height * (0.018 + seededUnit(strand, 8) * 0.052);
+        const magnet = 0.08 + seededUnit(strand, 9) * 0.1;
+
+        ctx.globalAlpha = 0.032 + seededUnit(strand, 10) * 0.056;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 0.55 + seededUnit(strand, 11) * 1.15;
         ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x + height * 0.24, height);
+
+        for (let step = 0; step <= 36; step += 1) {
+          const t = step / 36;
+          const x = width * t;
+          const rootPull = Math.sin(t * Math.PI) * magnet;
+          const wave =
+            Math.sin(t * Math.PI * (1.4 + seededUnit(strand, 12) * 2.3) + phase) * amplitude +
+            Math.cos(t * Math.PI * (2.8 + seededUnit(strand, 13) * 2.1) - phase * 0.78) * amplitude * 0.44;
+          const y = baseY + wave + (rootY - baseY) * rootPull;
+
+          if (step === 0) {
+            ctx.moveTo(x, y);
+          } else {
+            ctx.lineTo(x + Math.sin(phase + step) * 2, y);
+          }
+        }
+
         ctx.stroke();
       }
       ctx.restore();
 
       ctx.save();
-      ctx.globalAlpha = 0.09;
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 1;
-      for (let y = ((frame * -0.06) % 64) - 64; y < height + 64; y += 64) {
+      ctx.globalCompositeOperation = 'screen';
+      fieldParticles.forEach((particle, index) => {
+        const angle = particle.seed + frame * 0.0022 * particle.drift;
+        const sweep = Math.sin(frame * 0.0017 + particle.seed) * 0.08;
+        const x =
+          width * (0.5 + Math.cos(angle) * particle.orbit * 0.56 + Math.sin(angle * 0.37) * 0.08) +
+          Math.sin(frame * 0.004 + index) * 7;
+        const y =
+          height * (0.5 + Math.sin(angle + sweep) * particle.orbit * 0.42 + Math.cos(angle * 0.31) * 0.06) +
+          Math.cos(frame * 0.003 + index * 0.4) * 5;
+
+        if (x < -12 || x > width + 12 || y < -12 || y > height + 12) return;
+
+        ctx.globalAlpha = particle.alpha;
+        ctx.fillStyle = particle.color;
+        if (index % 5 === 0) {
+          ctx.fillRect(x, y, particle.size * 3.4, 1);
+        } else if (index % 7 === 0) {
+          ctx.fillRect(x, y, 1, particle.size * 3.2);
+        } else {
+          ctx.beginPath();
+          ctx.arc(x, y, particle.size, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      });
+      ctx.restore();
+
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.strokeStyle = 'rgba(255, 247, 237, 0.11)';
+      ctx.lineWidth = 0.8;
+      for (let ring = 0; ring < 5; ring += 1) {
+        const radius = 92 + ring * 58 + Math.sin(frame * 0.008 + ring) * 5;
+        ctx.globalAlpha = 0.12 - ring * 0.016;
         ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(width, y);
+        ctx.arc(rootX, rootY, radius, frame * 0.003 + ring, Math.PI * 1.38 + frame * 0.003 + ring);
         ctx.stroke();
+      }
+      ctx.restore();
+
+      ctx.save();
+      ctx.globalCompositeOperation = 'source-over';
+      const vignette = ctx.createRadialGradient(width / 2, height / 2, Math.min(width, height) * 0.2, width / 2, height / 2, Math.max(width, height) * 0.72);
+      vignette.addColorStop(0, 'rgba(5, 5, 6, 0)');
+      vignette.addColorStop(0.72, 'rgba(5, 5, 6, 0.1)');
+      vignette.addColorStop(1, 'rgba(5, 5, 6, 0.66)');
+      ctx.fillStyle = vignette;
+      ctx.fillRect(0, 0, width, height);
+
+      ctx.globalAlpha = 0.38;
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.025)';
+      for (let row = 0; row < height; row += 3) {
+        ctx.fillRect(0, row, width, 1);
       }
       ctx.restore();
     };
@@ -469,7 +583,7 @@ function NetworkOnly() {
         node.y += node.vy;
       });
 
-      drawBackground();
+      drawBackground(nodeMap);
 
       links.forEach((link, index) => {
         const source = nodeMap.get(link.source);
