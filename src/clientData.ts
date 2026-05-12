@@ -45,6 +45,7 @@ export const ventureNodes: GraphNode[] = [
     parentId: 'jd-builds',
     branchId: 'ref-buddy',
     website: 'https://refbuddy.ca',
+    logoSrc: '/logos/ref-buddy.png',
     color: '#ff7a1a',
     accent: '#ffe0c2',
     sector: 'Officiating infrastructure',

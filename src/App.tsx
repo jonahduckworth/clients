@@ -6,7 +6,16 @@ const WORLD_HEIGHT = 720;
 const GROUND_Y = 620;
 const BLOCK_SIZE = 52;
 const PLAYER_HEIGHT = 58;
+const PLAYER_HALF_WIDTH = 18;
 const GRAVITY = 0.78;
+const JUMP_VELOCITY = -22.2;
+const LEDGE_X = 398;
+const LEDGE_Y = 464;
+const LEDGE_WIDTH = 5 * 48;
+const PIPE_X = 824;
+const PIPE_TOP_Y = GROUND_Y - 104;
+const PIPE_PLATFORM_X = PIPE_X - 8;
+const PIPE_PLATFORM_WIDTH = 88;
 
 interface GameViewport {
   x: number;
@@ -49,8 +58,23 @@ interface Spark {
   maxLife: number;
 }
 
+interface Platform {
+  x: number;
+  y: number;
+  width: number;
+}
+
 const branchOrder: BranchId[] = ['ref-buddy', 'jd-builds', 'harvestingpro', 'league-hub'];
 const ventureMap = new Map(ventureNodes.map((node) => [node.branchId, node]));
+const platforms: Platform[] = [
+  { x: 206, y: 382, width: BLOCK_SIZE },
+  { x: 430, y: 318, width: BLOCK_SIZE },
+  { x: 566, y: 382, width: BLOCK_SIZE },
+  { x: 734, y: 318, width: BLOCK_SIZE },
+  { x: LEDGE_X, y: LEDGE_Y, width: LEDGE_WIDTH },
+  { x: PIPE_PLATFORM_X, y: PIPE_TOP_Y, width: PIPE_PLATFORM_WIDTH },
+  { x: 0, y: GROUND_Y, width: WORLD_WIDTH },
+];
 
 function getLogoUrl(node: GraphNode): string | undefined {
   if (node.logoSrc) return node.logoSrc;
@@ -285,23 +309,25 @@ function drawQuestionBlock(ctx: CanvasRenderingContext2D, block: GameBlock, fram
   pixelRect(ctx, x + 7, y + BLOCK_SIZE - 12, 5, 5, '#7c351f');
   pixelRect(ctx, x + BLOCK_SIZE - 12, y + BLOCK_SIZE - 12, 5, 5, '#7c351f');
 
-  const centerX = x + BLOCK_SIZE / 2;
-  const centerY = y + BLOCK_SIZE / 2;
-  ctx.translate(centerX, centerY);
-  ctx.rotate(frame * 0.034);
-  pixelRect(ctx, -18, -18, 36, 36, block.node.color);
-  pixelRect(ctx, -13, -13, 26, 26, '#1e1b19');
+  const badgeX = x + 12;
+  const badgeY = y + 12;
+  const glint = (frame + block.x * 0.7) % 180;
+  pixelRect(ctx, badgeX, badgeY, 28, 28, '#1e1b19');
+  pixelRect(ctx, badgeX + 2, badgeY + 2, 24, 24, 'rgba(255, 248, 239, 0.08)');
 
   if (block.imageReady && block.image) {
     ctx.save();
     ctx.beginPath();
-    ctx.rect(-11, -11, 22, 22);
+    ctx.rect(badgeX + 2, badgeY + 2, 24, 24);
     ctx.clip();
-    ctx.drawImage(block.image, -11, -11, 22, 22);
+    ctx.drawImage(block.image, badgeX + 2, badgeY + 2, 24, 24);
     ctx.restore();
   } else {
-    ctx.rotate(-frame * 0.034);
-    pixelText(ctx, block.node.shortName.slice(0, 2), 0, -8, 12, block.node.accent, 'center');
+    pixelText(ctx, block.node.shortName.slice(0, 2), badgeX + 14, badgeY + 9, 12, block.node.accent, 'center');
+  }
+
+  if (glint < 20) {
+    pixelRect(ctx, badgeX + 2 + glint * 1.05, badgeY + 3, 3, 22, 'rgba(255, 248, 239, 0.26)');
   }
 
   ctx.restore();
@@ -386,12 +412,9 @@ function drawScene(ctx: CanvasRenderingContext2D, blocks: GameBlock[], player: P
   drawHill(ctx, 450, GROUND_Y - 12, 120, 76, '#d66d3a');
   drawBush(ctx, 42, GROUND_Y - 66, '#8fda3b');
   drawBush(ctx, 604, GROUND_Y - 66, '#8fda3b');
-  drawConduit(ctx, 824, GROUND_Y - 128);
+  drawConduit(ctx, PIPE_X, GROUND_Y - 128);
 
-  for (let i = 0; i < 5; i += 1) drawBrick(ctx, 398 + i * 48, 464, 48, 30);
-  pixelRect(ctx, 446, 434, 48, 30, '#d0713a');
-  pixelRect(ctx, 446, 438, 48, 5, '#ffc07a');
-  pixelRect(ctx, 490, 434, 4, 30, '#632519');
+  for (let i = 0; i < 5; i += 1) drawBrick(ctx, LEDGE_X + i * 48, LEDGE_Y, 48, 30);
 
   blocks.forEach((block) => drawQuestionBlock(ctx, block, frame));
   blocks.forEach((block) => drawRevealPanel(ctx, block, frame));
@@ -425,7 +448,7 @@ function addBlockSparks(sparks: Spark[], block: GameBlock) {
 
 function updateGame(player: Player, blocks: GameBlock[], sparks: Spark[], frame: number) {
   if (player.jumpQueued && player.onGround) {
-    player.vy = -18.2;
+    player.vy = JUMP_VELOCITY;
     player.onGround = false;
   }
   player.jumpQueued = false;
@@ -435,6 +458,7 @@ function updateGame(player: Player, blocks: GameBlock[], sparks: Spark[], frame:
   if (Math.abs(player.vx) > 0.25) player.facing = player.vx >= 0 ? 1 : -1;
 
   const previousHeadY = player.y - PLAYER_HEIGHT;
+  const previousFootY = player.y;
   player.x = clamp(player.x + player.vx, 28, WORLD_WIDTH - 28);
   player.vy += GRAVITY;
   player.y += player.vy;
@@ -460,11 +484,23 @@ function updateGame(player: Player, blocks: GameBlock[], sparks: Spark[], frame:
     });
   }
 
-  if (player.y >= GROUND_Y) {
-    player.y = GROUND_Y;
-    player.vy = 0;
-    player.onGround = true;
+  let landed = false;
+  if (player.vy >= 0) {
+    for (const platform of platforms) {
+      const overlapsX =
+        player.x + PLAYER_HALF_WIDTH > platform.x && player.x - PLAYER_HALF_WIDTH < platform.x + platform.width;
+      const crossesTop = previousFootY <= platform.y && player.y >= platform.y;
+      if (!overlapsX || !crossesTop) continue;
+
+      player.y = platform.y;
+      player.vy = 0;
+      player.onGround = true;
+      landed = true;
+      break;
+    }
   }
+
+  if (!landed) player.onGround = false;
 
   for (let index = sparks.length - 1; index >= 0; index -= 1) {
     const spark = sparks[index];
@@ -533,6 +569,9 @@ function PixelClientsGame() {
       ctx.save();
       ctx.translate(viewport.x, viewport.y);
       ctx.scale(viewport.scale, viewport.scale);
+      ctx.beginPath();
+      ctx.rect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+      ctx.clip();
       drawScene(ctx, blocksRef.current, playerRef.current, sparksRef.current, frame);
       ctx.restore();
 
