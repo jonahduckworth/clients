@@ -403,7 +403,7 @@ function drawScene(ctx: CanvasRenderingContext2D, blocks: GameBlock[], player: P
   pixelText(ctx, 'JD BUILDS', 44, 42, 25, '#fff8ef');
   pixelText(ctx, `CLIENTS ${clientNodes.length.toString().padStart(2, '0')}`, 308, 42, 25, '#fff8ef');
   pixelText(ctx, 'WORLD C-1', 552, 42, 25, '#fff8ef');
-  pixelText(ctx, 'TIME 2026', 780, 42, 25, '#fff8ef');
+  pixelText(ctx, 'TIME 2022', 780, 42, 25, '#fff8ef');
 
   drawCloud(ctx, 146, 130, 1.35);
   drawCloud(ctx, 648, 138, 1.15);
