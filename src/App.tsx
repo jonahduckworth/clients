@@ -1,70 +1,86 @@
 import { PointerEvent, useEffect, useRef } from 'react';
-import { GraphNode, clientNodes, graphNodes } from './clientData';
+import { BranchId, GraphNode, branchLabels, clientNodes, rootNode, ventureNodes } from './clientData';
 
-interface RenderNode extends GraphNode {
+const WORLD_WIDTH = 960;
+const WORLD_HEIGHT = 720;
+const GROUND_Y = 620;
+const BLOCK_SIZE = 52;
+const PLAYER_HEIGHT = 58;
+const PLAYER_HALF_WIDTH = 18;
+const GRAVITY = 0.78;
+const JUMP_VELOCITY = -21.1;
+const LEDGE_X = 398;
+const LEDGE_Y = 464;
+const LEDGE_WIDTH = 5 * 48;
+const PIPE_X = 824;
+const PIPE_TOP_Y = GROUND_Y - 104;
+const PIPE_PLATFORM_X = PIPE_X - 8;
+const PIPE_PLATFORM_WIDTH = 88;
+
+interface GameViewport {
   x: number;
   y: number;
-  tx: number;
-  ty: number;
-  vx: number;
-  vy: number;
-  radius: number;
-  visible: boolean;
+  scale: number;
+  width: number;
+  height: number;
+}
+
+interface GameBlock {
+  id: BranchId;
+  node: GraphNode;
+  clients: GraphNode[];
+  x: number;
+  y: number;
   image?: HTMLImageElement;
   imageReady: boolean;
+  hitFrames: number;
+  revealUntil: number;
+  openedAt: number;
 }
 
-interface Signal {
-  linkIndex: number;
-  progress: number;
-  speed: number;
-  size: number;
-  alpha: number;
+interface Player {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  targetX: number;
+  facing: 1 | -1;
+  onGround: boolean;
+  jumpQueued: boolean;
 }
 
-interface FieldParticle {
-  seed: number;
-  orbit: number;
-  drift: number;
-  size: number;
-  alpha: number;
+interface Spark {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
   color: string;
+  life: number;
+  maxLife: number;
 }
 
-const branchOrder = ['ref-buddy', 'harvestingpro', 'league-hub'] as const;
-const backgroundPalette = ['#fff7ed', '#fbbf7a', '#ff7a1a', '#6ee79a', '#b98cff'];
-const fieldParticles: FieldParticle[] = Array.from({ length: 142 }, (_, index) => ({
-  seed: index * 17.831,
-  orbit: 0.08 + seededUnit(index, 1) * 0.86,
-  drift: 0.45 + seededUnit(index, 2) * 1.35,
-  size: 0.7 + seededUnit(index, 3) * 1.8,
-  alpha: 0.12 + seededUnit(index, 4) * 0.24,
-  color: backgroundPalette[index % backgroundPalette.length],
-}));
-
-function seededUnit(index: number, salt = 0): number {
-  const value = Math.sin(index * 127.1 + salt * 311.7) * 43758.5453123;
-  return value - Math.floor(value);
+interface Platform {
+  x: number;
+  y: number;
+  width: number;
 }
 
-function getLogoUrl(website?: string): string | undefined {
-  if (!website) return undefined;
-  return `https://www.google.com/s2/favicons?sz=128&domain_url=${encodeURIComponent(website)}`;
-}
+const branchOrder: BranchId[] = ['ref-buddy', 'jd-builds', 'harvestingpro', 'league-hub'];
+const ventureMap = new Map(ventureNodes.map((node) => [node.branchId, node]));
+const platforms: Platform[] = [
+  { x: 206, y: 382, width: BLOCK_SIZE },
+  { x: 430, y: 318, width: BLOCK_SIZE },
+  { x: 566, y: 382, width: BLOCK_SIZE },
+  { x: 734, y: 318, width: BLOCK_SIZE },
+  { x: LEDGE_X, y: LEDGE_Y, width: LEDGE_WIDTH },
+  { x: PIPE_PLATFORM_X, y: PIPE_TOP_Y, width: PIPE_PLATFORM_WIDTH },
+  { x: 0, y: GROUND_Y, width: WORLD_WIDTH },
+];
 
-function getNodeImageUrl(node: GraphNode): string | undefined {
-  if (node.kind === 'root') return undefined;
-  return node.logoSrc || getLogoUrl(node.website);
-}
-
-function getInitials(name: string): string {
-  return name
-    .replace(/&/g, ' ')
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase())
-    .join('');
+function getLogoUrl(node: GraphNode): string | undefined {
+  if (node.logoSrc) return node.logoSrc;
+  if (!node.website) return undefined;
+  return `https://www.google.com/s2/favicons?sz=128&domain_url=${encodeURIComponent(node.website)}`;
 }
 
 function getTenureToken(node: GraphNode, now = new Date()): string {
@@ -91,144 +107,430 @@ function getTenureToken(node: GraphNode, now = new Date()): string {
   return 'new';
 }
 
-function createRenderNode(node: GraphNode): RenderNode {
-  const radius = node.kind === 'root' ? 49 : node.kind === 'venture' ? 31 : 19;
-  const logoUrl = getNodeImageUrl(node);
-  const image = logoUrl ? new Image() : undefined;
+function createBlock(id: BranchId, x: number, y: number): GameBlock {
+  const node = id === 'jd-builds' ? rootNode : ventureMap.get(id);
+  if (!node) throw new Error(`Missing venture node for ${id}`);
 
-  const renderNode: RenderNode = {
-    ...node,
-    x: 0,
-    y: 0,
-    tx: 0,
-    ty: 0,
-    vx: 0,
-    vy: 0,
-    radius,
-    visible: true,
+  const logoUrl = getLogoUrl(node);
+  const image = logoUrl ? new Image() : undefined;
+  const block: GameBlock = {
+    id,
+    node,
+    clients: clientNodes.filter((client) => client.branchId === id),
+    x,
+    y,
     image,
     imageReady: false,
+    hitFrames: 0,
+    revealUntil: 0,
+    openedAt: 0,
   };
 
   if (image && logoUrl) {
+    image.crossOrigin = 'anonymous';
     image.onload = () => {
-      renderNode.imageReady = true;
+      block.imageReady = true;
     };
     image.onerror = () => {
-      renderNode.imageReady = false;
+      block.imageReady = false;
     };
     image.src = logoUrl;
   }
 
-  return renderNode;
+  return block;
 }
 
-function placeTargets(nodes: RenderNode[], width: number, height: number) {
-  const isMobile = width < 760;
-  const centerX = isMobile ? width * 0.5 : width / 2;
-  const centerY = isMobile ? height * 0.48 : height / 2;
-  const spread = Math.min(width, height);
-  const root = nodes.find((node) => node.id === 'jd-builds');
+function createBlocks(): GameBlock[] {
+  return [
+    createBlock('ref-buddy', 206, 382),
+    createBlock('jd-builds', 430, 318),
+    createBlock('harvestingpro', 566, 382),
+    createBlock('league-hub', 734, 318),
+  ];
+}
 
-  if (root) {
-    root.tx = centerX;
-    root.ty = centerY;
+function pixelRect(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, color: string) {
+  ctx.fillStyle = color;
+  ctx.fillRect(Math.round(x), Math.round(y), Math.round(width), Math.round(height));
+}
+
+function pixelText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  size: number,
+  color: string,
+  align: CanvasTextAlign = 'left',
+) {
+  ctx.save();
+  ctx.font = `700 ${size}px "Courier New", ui-monospace, SFMono-Regular, Menlo, monospace`;
+  ctx.textAlign = align;
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = '#1f1b16';
+  ctx.fillText(text, Math.round(x + 2), Math.round(y + 2));
+  ctx.fillStyle = color;
+  ctx.fillText(text, Math.round(x), Math.round(y));
+  ctx.restore();
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function createViewport(width: number, height: number): GameViewport {
+  const margin = width < 760 ? 8 : 28;
+  const scale = Math.min((width - margin * 2) / WORLD_WIDTH, (height - margin * 2) / WORLD_HEIGHT);
+  const viewportWidth = WORLD_WIDTH * scale;
+  const viewportHeight = WORLD_HEIGHT * scale;
+
+  return {
+    x: (width - viewportWidth) / 2,
+    y: (height - viewportHeight) / 2,
+    scale,
+    width: viewportWidth,
+    height: viewportHeight,
+  };
+}
+
+function pointerToWorld(event: PointerEvent<HTMLCanvasElement>, viewport: GameViewport): { x: number; y: number } {
+  const rect = event.currentTarget.getBoundingClientRect();
+  const canvasX = event.clientX - rect.left;
+  const canvasY = event.clientY - rect.top;
+
+  return {
+    x: clamp((canvasX - viewport.x) / viewport.scale, 16, WORLD_WIDTH - 16),
+    y: clamp((canvasY - viewport.y) / viewport.scale, 16, WORLD_HEIGHT - 16),
+  };
+}
+
+function drawCloud(ctx: CanvasRenderingContext2D, x: number, y: number, scale = 1) {
+  const block = 10 * scale;
+  const cells = [
+    [2, 1],
+    [3, 0],
+    [4, 0],
+    [5, 1],
+    [0, 2],
+    [1, 2],
+    [2, 2],
+    [3, 2],
+    [4, 2],
+    [5, 2],
+    [6, 2],
+    [1, 3],
+    [2, 3],
+    [3, 3],
+    [4, 3],
+    [5, 3],
+  ];
+
+  cells.forEach(([cx, cy]) => pixelRect(ctx, x + cx * block, y + cy * block, block, block, '#fff8ef'));
+  pixelRect(ctx, x + block * 1.5, y + block * 3.6, block * 4.4, block * 0.45, '#5fc7dd');
+}
+
+function drawHill(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, color: string) {
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x + width * 0.5, y - height);
+  ctx.lineTo(x + width, y);
+  ctx.closePath();
+  ctx.fill();
+  pixelRect(ctx, x + width * 0.48, y - height * 0.66, 6, 18, '#143c26');
+  pixelRect(ctx, x + width * 0.72, y - height * 0.34, 7, 15, '#143c26');
+  ctx.restore();
+}
+
+function drawBush(ctx: CanvasRenderingContext2D, x: number, y: number, color: string) {
+  const cells = [
+    [0, 2],
+    [1, 1],
+    [2, 0],
+    [3, 1],
+    [4, 0],
+    [5, 1],
+    [6, 2],
+    [1, 2],
+    [2, 2],
+    [3, 2],
+    [4, 2],
+    [5, 2],
+  ];
+  cells.forEach(([cx, cy]) => pixelRect(ctx, x + cx * 14, y + cy * 14, 15, 15, color));
+  pixelRect(ctx, x + 8, y + 45, 76, 8, '#1f4d27');
+}
+
+function drawBrick(ctx: CanvasRenderingContext2D, x: number, y: number, width = 48, height = 30) {
+  pixelRect(ctx, x, y, width, height, '#b95530');
+  pixelRect(ctx, x, y, width, 4, '#ffb56f');
+  pixelRect(ctx, x, y + height - 4, width, 4, '#632519');
+  pixelRect(ctx, x + width - 4, y, 4, height, '#632519');
+  pixelRect(ctx, x + 2, y + Math.floor(height / 2), width - 4, 3, '#6f2a1e');
+  pixelRect(ctx, x + Math.floor(width / 2), y + 4, 3, Math.floor(height / 2) - 4, '#6f2a1e');
+}
+
+function drawGround(ctx: CanvasRenderingContext2D) {
+  pixelRect(ctx, 0, GROUND_Y, WORLD_WIDTH, WORLD_HEIGHT - GROUND_Y, '#7b3421');
+  for (let row = 0; row < 4; row += 1) {
+    const y = GROUND_Y + row * 28;
+    for (let x = -24; x < WORLD_WIDTH + 48; x += 48) {
+      drawBrick(ctx, x + (row % 2) * 24, y, 48, 30);
+    }
+  }
+  pixelRect(ctx, 0, GROUND_Y - 6, WORLD_WIDTH, 6, '#fff8ef');
+  pixelRect(ctx, 0, GROUND_Y - 12, WORLD_WIDTH, 6, '#2b7f36');
+}
+
+function drawConduit(ctx: CanvasRenderingContext2D, x: number, y: number) {
+  pixelRect(ctx, x, y + 42, 72, 86, '#159447');
+  pixelRect(ctx, x + 8, y + 42, 11, 86, '#79e36f');
+  pixelRect(ctx, x + 51, y + 42, 9, 86, '#0a5b33');
+  pixelRect(ctx, x - 8, y + 24, 88, 28, '#2abd58');
+  pixelRect(ctx, x - 4, y + 28, 80, 6, '#9cff82');
+  pixelRect(ctx, x + 66, y + 24, 8, 28, '#0b6431');
+}
+
+function drawQuestionBlock(ctx: CanvasRenderingContext2D, block: GameBlock, frame: number) {
+  const hitOffset = block.hitFrames > 0 ? -Math.sin((block.hitFrames / 14) * Math.PI) * 11 : 0;
+  const x = block.x;
+  const y = block.y + hitOffset;
+  const glow = block.revealUntil > frame;
+
+  ctx.save();
+  ctx.shadowColor = block.node.color;
+  ctx.shadowBlur = glow ? 26 : 10;
+  pixelRect(ctx, x, y, BLOCK_SIZE, BLOCK_SIZE, '#f6a24e');
+  pixelRect(ctx, x + 4, y + 4, BLOCK_SIZE - 8, BLOCK_SIZE - 8, '#ffc36e');
+  pixelRect(ctx, x, y, BLOCK_SIZE, 5, '#fff1a8');
+  pixelRect(ctx, x, y + BLOCK_SIZE - 5, BLOCK_SIZE, 5, '#7c351f');
+  pixelRect(ctx, x + BLOCK_SIZE - 5, y, 5, BLOCK_SIZE, '#7c351f');
+  pixelRect(ctx, x + 7, y + 7, 5, 5, '#7c351f');
+  pixelRect(ctx, x + BLOCK_SIZE - 12, y + 7, 5, 5, '#7c351f');
+  pixelRect(ctx, x + 7, y + BLOCK_SIZE - 12, 5, 5, '#7c351f');
+  pixelRect(ctx, x + BLOCK_SIZE - 12, y + BLOCK_SIZE - 12, 5, 5, '#7c351f');
+
+  const badgeX = x + 12;
+  const badgeY = y + 12;
+  const glint = (frame + block.x * 0.7) % 180;
+  pixelRect(ctx, badgeX, badgeY, 28, 28, '#1e1b19');
+  pixelRect(ctx, badgeX + 2, badgeY + 2, 24, 24, 'rgba(255, 248, 239, 0.08)');
+
+  if (block.imageReady && block.image) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(badgeX + 2, badgeY + 2, 24, 24);
+    ctx.clip();
+    ctx.drawImage(block.image, badgeX + 2, badgeY + 2, 24, 24);
+    ctx.restore();
+  } else {
+    pixelText(ctx, block.node.shortName.slice(0, 2), badgeX + 14, badgeY + 9, 12, block.node.accent, 'center');
   }
 
-  const ventureTargets: Record<string, [number, number]> =
-    isMobile
-      ? {
-          'ref-buddy': [width * 0.27, height * 0.38],
-          harvestingpro: [width * 0.75, height * 0.48],
-          'league-hub': [width * 0.38, height * 0.68],
-        }
-      : {
-          'ref-buddy': [centerX - spread * 0.32, centerY - spread * 0.2],
-          harvestingpro: [centerX + spread * 0.34, centerY - spread * 0.06],
-          'league-hub': [centerX - spread * 0.18, centerY + spread * 0.3],
-        };
+  if (glint < 20) {
+    pixelRect(ctx, badgeX + 2 + glint * 1.05, badgeY + 3, 3, 22, 'rgba(255, 248, 239, 0.26)');
+  }
 
-  nodes.forEach((node) => {
-    if (node.kind === 'venture') {
-      const target = ventureTargets[node.id];
-      if (target) {
-        node.tx = target[0];
-        node.ty = target[1];
-      }
-    }
+  ctx.restore();
+
+  ctx.save();
+  pixelText(ctx, '?', x + BLOCK_SIZE - 16, y + 5, 12, '#7c351f', 'center');
+  ctx.restore();
+}
+
+function drawRevealPanel(ctx: CanvasRenderingContext2D, block: GameBlock, frame: number) {
+  const visibleFrames = block.revealUntil - frame;
+  if (visibleFrames <= 0) return;
+
+  const clients = block.clients;
+  const panelWidth = block.id === 'harvestingpro' ? 300 : 274;
+  const panelHeight = 52 + clients.length * 24;
+  const x = clamp(block.x + BLOCK_SIZE / 2 - panelWidth / 2, 18, WORLD_WIDTH - panelWidth - 18);
+  const aboveY = block.y - panelHeight - 26;
+  const y = aboveY > 76 ? aboveY : block.y + BLOCK_SIZE + 22;
+
+  ctx.save();
+  ctx.globalAlpha = Math.min(1, visibleFrames / 22);
+  pixelRect(ctx, x + 6, y + 7, panelWidth, panelHeight, 'rgba(30, 19, 13, 0.5)');
+  pixelRect(ctx, x, y, panelWidth, panelHeight, '#fff3c4');
+  pixelRect(ctx, x + 5, y + 5, panelWidth - 10, panelHeight - 10, '#17261a');
+  pixelRect(ctx, x + 5, y + 5, panelWidth - 10, 28, block.node.color);
+  pixelText(ctx, branchLabels[block.id].toUpperCase(), x + 16, y + 10, 15, '#fff8ef');
+  pixelText(ctx, `${clients.length} ACTIVE`, x + panelWidth - 18, y + 10, 15, '#fff8ef', 'right');
+
+  clients.forEach((client, index) => {
+    const rowY = y + 42 + index * 24;
+    pixelRect(ctx, x + 16, rowY + 7, 8, 8, index % 2 === 0 ? block.node.color : block.node.accent);
+    pixelText(ctx, client.shortName, x + 32, rowY, 14, '#fff8ef');
+    pixelText(ctx, getTenureToken(client), x + panelWidth - 18, rowY, 14, '#ffdf7d', 'right');
   });
 
-  const clientRadius = isMobile ? Math.min(108, Math.max(88, width * 0.28)) : spread * 0.21;
-  const directRadius = isMobile ? Math.min(124, Math.max(104, width * 0.32)) : spread * 0.24;
+  ctx.restore();
+}
 
-  const angleRanges = {
-    'ref-buddy': isMobile ? [-212, -70] : [-224, -58],
-    harvestingpro: isMobile ? [-84, 96] : [-30, 150],
-    'league-hub': isMobile ? [88, 130] : [86, 126],
-    'jd-builds': isMobile ? [-38, -18] : [-50, -22],
-  };
+function drawPlayer(ctx: CanvasRenderingContext2D, player: Player, frame: number) {
+  const x = player.x;
+  const y = player.y;
+  const step = player.onGround ? Math.sin(frame * 0.24) * Math.min(5, Math.abs(player.vx) * 0.8) : 0;
 
-  [...branchOrder, 'jd-builds'].forEach((branchId) => {
-    const children = nodes.filter((node) => node.kind === 'client' && node.branchId === branchId);
-    const parent = branchId === 'jd-builds' ? root : nodes.find((node) => node.id === branchId);
-    if (!parent) return;
+  ctx.save();
+  ctx.translate(Math.round(x), Math.round(y));
+  ctx.scale(player.facing, 1);
 
-    const [start, end] = angleRanges[branchId as keyof typeof angleRanges];
-    const step = children.length <= 1 ? 0 : (end - start) / (children.length - 1);
+  pixelRect(ctx, -15, -PLAYER_HEIGHT + 6, 30, 12, '#f4c460');
+  pixelRect(ctx, -18, -PLAYER_HEIGHT + 14, 36, 10, '#d48332');
+  pixelRect(ctx, -14, -PLAYER_HEIGHT + 24, 28, 20, '#f2b265');
+  pixelRect(ctx, -9, -PLAYER_HEIGHT + 29, 5, 5, '#1b120c');
+  pixelRect(ctx, 6, -PLAYER_HEIGHT + 29, 5, 5, '#1b120c');
+  pixelRect(ctx, -12, -PLAYER_HEIGHT + 42, 24, 24, '#2d71b8');
+  pixelRect(ctx, -18, -PLAYER_HEIGHT + 43, 8, 22, '#f05d3b');
+  pixelRect(ctx, 10, -PLAYER_HEIGHT + 43, 8, 22, '#f05d3b');
+  pixelRect(ctx, -12, -14 + step, 10, 14, '#2d3d73');
+  pixelRect(ctx, 3, -14 - step, 10, 14, '#2d3d73');
+  pixelRect(ctx, -17, -2 + step, 17, 6, '#221710');
+  pixelRect(ctx, 1, -2 - step, 17, 6, '#221710');
+  pixelRect(ctx, -10, -PLAYER_HEIGHT + 46, 5, 5, '#ffe07a');
+  pixelRect(ctx, 5, -PLAYER_HEIGHT + 46, 5, 5, '#ffe07a');
 
-    children.forEach((child, index) => {
-      if (branchId === 'jd-builds' && children.length === 1) {
-        child.tx = parent.tx + (isMobile ? width * 0.01 : spread * 0.04);
-        child.ty = parent.ty - (isMobile ? height * 0.24 : spread * 0.24);
-        return;
-      }
+  ctx.restore();
+}
 
-      const degrees = children.length <= 1 ? (start + end) / 2 : start + step * index;
-      const angle = (degrees * Math.PI) / 180;
-      const radius = branchId === 'jd-builds' ? directRadius : clientRadius;
-      child.tx = parent.tx + Math.cos(angle) * radius;
-      child.ty = parent.ty + Math.sin(angle) * radius;
+function drawScene(ctx: CanvasRenderingContext2D, blocks: GameBlock[], player: Player, sparks: Spark[], frame: number) {
+  pixelRect(ctx, 0, 0, WORLD_WIDTH, WORLD_HEIGHT, '#86aee5');
+  pixelRect(ctx, 0, 0, WORLD_WIDTH, 92, '#7da4da');
+
+  pixelText(ctx, 'JD BUILDS', 44, 42, 25, '#fff8ef');
+  pixelText(ctx, `CLIENTS ${clientNodes.length.toString().padStart(2, '0')}`, 308, 42, 25, '#fff8ef');
+  pixelText(ctx, 'WORLD C-1', 552, 42, 25, '#fff8ef');
+  pixelText(ctx, 'TIME 2022', 780, 42, 25, '#fff8ef');
+
+  drawCloud(ctx, 146, 130, 1.35);
+  drawCloud(ctx, 648, 138, 1.15);
+  drawCloud(ctx, 732, 124, 1);
+  drawHill(ctx, 236, GROUND_Y - 12, 148, 104, '#39b85f');
+  drawHill(ctx, 450, GROUND_Y - 12, 120, 76, '#d66d3a');
+  drawBush(ctx, 42, GROUND_Y - 66, '#8fda3b');
+  drawBush(ctx, 604, GROUND_Y - 66, '#8fda3b');
+  drawConduit(ctx, PIPE_X, GROUND_Y - 128);
+
+  for (let i = 0; i < 5; i += 1) drawBrick(ctx, LEDGE_X + i * 48, LEDGE_Y, 48, 30);
+
+  blocks.forEach((block) => drawQuestionBlock(ctx, block, frame));
+  blocks
+    .slice()
+    .sort((a, b) => a.openedAt - b.openedAt)
+    .forEach((block) => drawRevealPanel(ctx, block, frame));
+
+  sparks.forEach((spark) => {
+    const alpha = spark.life / spark.maxLife;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    pixelRect(ctx, spark.x, spark.y, 5, 5, spark.color);
+    ctx.restore();
+  });
+
+  drawGround(ctx);
+  drawPlayer(ctx, player, frame);
+}
+
+function addBlockSparks(sparks: Spark[], block: GameBlock) {
+  for (let index = 0; index < 14; index += 1) {
+    const angle = -Math.PI + (index / 13) * Math.PI;
+    sparks.push({
+      x: block.x + BLOCK_SIZE / 2,
+      y: block.y + 4,
+      vx: Math.cos(angle) * (1.4 + Math.random() * 2.6),
+      vy: Math.sin(angle) * (2.4 + Math.random() * 2.8) - 1.8,
+      color: index % 2 === 0 ? block.node.color : '#fff8ef',
+      life: 34 + Math.random() * 18,
+      maxLife: 52,
     });
+  }
+}
+
+function updateGame(player: Player, blocks: GameBlock[], sparks: Spark[], frame: number) {
+  if (player.jumpQueued && player.onGround) {
+    player.vy = JUMP_VELOCITY;
+    player.onGround = false;
+  }
+  player.jumpQueued = false;
+
+  const desiredVx = clamp((player.targetX - player.x) * 0.065, -8.5, 8.5);
+  player.vx += (desiredVx - player.vx) * 0.22;
+  if (Math.abs(player.vx) > 0.25) player.facing = player.vx >= 0 ? 1 : -1;
+
+  const previousHeadY = player.y - PLAYER_HEIGHT;
+  const previousFootY = player.y;
+  player.x = clamp(player.x + player.vx, 28, WORLD_WIDTH - 28);
+  player.vy += GRAVITY;
+  player.y += player.vy;
+
+  blocks.forEach((block) => {
+    if (block.hitFrames > 0) block.hitFrames -= 1;
   });
 
-  nodes.forEach((node) => {
-    node.tx = Math.max(44, Math.min(width - 44, node.tx));
-    node.ty = Math.max(44, Math.min(height - 44, node.ty));
+  if (player.vy < 0) {
+    const headY = player.y - PLAYER_HEIGHT;
+    const centerX = player.x;
+    blocks.forEach((block) => {
+      const bottom = block.y + BLOCK_SIZE;
+      const overlapsX = centerX > block.x - 9 && centerX < block.x + BLOCK_SIZE + 9;
+      const crossesBottom = headY <= bottom && previousHeadY >= bottom;
+      if (!overlapsX || !crossesBottom) return;
 
-    if (node.x === 0 && node.y === 0) {
-      node.x = node.tx + (Math.random() - 0.5) * 30;
-      node.y = node.ty + (Math.random() - 0.5) * 30;
+      player.y = bottom + PLAYER_HEIGHT + 1;
+      player.vy = 5.4;
+      block.hitFrames = 14;
+      block.revealUntil = frame + 430;
+      block.openedAt = frame;
+      addBlockSparks(sparks, block);
+    });
+  }
+
+  let landed = false;
+  if (player.vy >= 0) {
+    for (const platform of platforms) {
+      const overlapsX =
+        player.x + PLAYER_HALF_WIDTH > platform.x && player.x - PLAYER_HALF_WIDTH < platform.x + platform.width;
+      const crossesTop = previousFootY <= platform.y && player.y >= platform.y;
+      if (!overlapsX || !crossesTop) continue;
+
+      player.y = platform.y;
+      player.vy = 0;
+      player.onGround = true;
+      landed = true;
+      break;
     }
-  });
+  }
+
+  if (!landed) player.onGround = false;
+
+  for (let index = sparks.length - 1; index >= 0; index -= 1) {
+    const spark = sparks[index];
+    spark.x += spark.vx;
+    spark.y += spark.vy;
+    spark.vy += 0.18;
+    spark.life -= 1;
+    if (spark.life <= 0) sparks.splice(index, 1);
+  }
 }
 
-function getLinks() {
-  return graphNodes
-    .filter((node) => node.parentId)
-    .map((node) => ({ source: node.parentId!, target: node.id }));
-}
-
-function NetworkOnly() {
+function PixelClientsGame() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const nodesRef = useRef<RenderNode[]>(graphNodes.map(createRenderNode));
-  const signalsRef = useRef<Signal[]>([]);
-  const pointerRef = useRef({ x: -1000, y: -1000, hoverId: '' });
-
-  useEffect(() => {
-    nodesRef.current.forEach((node) => {
-      if (!node.image) return;
-      if (node.image.complete && node.image.naturalWidth > 0) {
-        node.imageReady = true;
-        return;
-      }
-      node.image.onload = () => {
-        node.imageReady = true;
-      };
-      node.image.onerror = () => {
-        node.imageReady = false;
-      };
-    });
-  }, []);
+  const viewportRef = useRef<GameViewport>(createViewport(WORLD_WIDTH, WORLD_HEIGHT));
+  const blocksRef = useRef<GameBlock[]>(createBlocks());
+  const playerRef = useRef<Player>({
+    x: 132,
+    y: GROUND_Y,
+    vx: 0,
+    vy: 0,
+    targetX: 132,
+    facing: 1,
+    onGround: true,
+    jumpQueued: false,
+  });
+  const sparksRef = useRef<Spark[]>([]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -249,361 +551,39 @@ function NetworkOnly() {
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      placeTargets(nodesRef.current, width, height);
+      ctx.imageSmoothingEnabled = false;
+      viewportRef.current = createViewport(width, height);
     };
 
     resize();
     window.addEventListener('resize', resize);
 
-    const links = getLinks();
-    const ensureSignals = () => {
-      if (signalsRef.current.length === Math.max(18, links.length * 3)) return;
-
-      signalsRef.current = Array.from({ length: Math.max(18, links.length * 3) }, (_, index) => ({
-        linkIndex: index % links.length,
-        progress: Math.random(),
-        speed: 0.0016 + Math.random() * 0.0038,
-        size: 1 + Math.random() * 1.8,
-        alpha: 0.3 + Math.random() * 0.5,
-      }));
-    };
-
-    const drawBackground = (nodeMap: Map<string, RenderNode>) => {
-      ctx.fillStyle = '#050506';
-      ctx.fillRect(0, 0, width, height);
-
-      ctx.save();
-      ctx.globalCompositeOperation = 'screen';
-      nodesRef.current
-        .filter((node) => node.kind !== 'client')
-        .forEach((node) => {
-          const scale = node.kind === 'root' ? 0.38 : 0.25;
-          const glowRadius = Math.max(width, height) * scale;
-          const gradient = ctx.createRadialGradient(node.x, node.y, 0, node.x, node.y, glowRadius);
-          gradient.addColorStop(0, `${node.color}24`);
-          gradient.addColorStop(0.26, `${node.color}10`);
-          gradient.addColorStop(1, `${node.color}00`);
-          ctx.fillStyle = gradient;
-          ctx.fillRect(0, 0, width, height);
-        });
-      ctx.restore();
-
-      ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-
-      const root = nodeMap.get('jd-builds');
-      const rootX = root?.x ?? width / 2;
-      const rootY = root?.y ?? height / 2;
-      const fieldCount = width < 760 ? 18 : 28;
-
-      for (let strand = 0; strand < fieldCount; strand += 1) {
-        const color = backgroundPalette[strand % backgroundPalette.length];
-        const baseY = height * (0.09 + seededUnit(strand, 6) * 0.82);
-        const phase = frame * (0.0024 + seededUnit(strand, 7) * 0.0022) + strand * 0.71;
-        const amplitude = height * (0.018 + seededUnit(strand, 8) * 0.052);
-        const magnet = 0.08 + seededUnit(strand, 9) * 0.1;
-
-        ctx.globalAlpha = 0.032 + seededUnit(strand, 10) * 0.056;
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 0.55 + seededUnit(strand, 11) * 1.15;
-        ctx.beginPath();
-
-        for (let step = 0; step <= 36; step += 1) {
-          const t = step / 36;
-          const x = width * t;
-          const rootPull = Math.sin(t * Math.PI) * magnet;
-          const wave =
-            Math.sin(t * Math.PI * (1.4 + seededUnit(strand, 12) * 2.3) + phase) * amplitude +
-            Math.cos(t * Math.PI * (2.8 + seededUnit(strand, 13) * 2.1) - phase * 0.78) * amplitude * 0.44;
-          const y = baseY + wave + (rootY - baseY) * rootPull;
-
-          if (step === 0) {
-            ctx.moveTo(x, y);
-          } else {
-            ctx.lineTo(x + Math.sin(phase + step) * 2, y);
-          }
-        }
-
-        ctx.stroke();
-      }
-      ctx.restore();
-
-      ctx.save();
-      ctx.globalCompositeOperation = 'screen';
-      fieldParticles.forEach((particle, index) => {
-        const angle = particle.seed + frame * 0.0022 * particle.drift;
-        const sweep = Math.sin(frame * 0.0017 + particle.seed) * 0.08;
-        const x =
-          width * (0.5 + Math.cos(angle) * particle.orbit * 0.56 + Math.sin(angle * 0.37) * 0.08) +
-          Math.sin(frame * 0.004 + index) * 7;
-        const y =
-          height * (0.5 + Math.sin(angle + sweep) * particle.orbit * 0.42 + Math.cos(angle * 0.31) * 0.06) +
-          Math.cos(frame * 0.003 + index * 0.4) * 5;
-
-        if (x < -12 || x > width + 12 || y < -12 || y > height + 12) return;
-
-        ctx.globalAlpha = particle.alpha;
-        ctx.fillStyle = particle.color;
-        if (index % 5 === 0) {
-          ctx.fillRect(x, y, particle.size * 3.4, 1);
-        } else if (index % 7 === 0) {
-          ctx.fillRect(x, y, 1, particle.size * 3.2);
-        } else {
-          ctx.beginPath();
-          ctx.arc(x, y, particle.size, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      });
-      ctx.restore();
-
-      ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.strokeStyle = 'rgba(255, 247, 237, 0.11)';
-      ctx.lineWidth = 0.8;
-      for (let ring = 0; ring < 5; ring += 1) {
-        const radius = 92 + ring * 58 + Math.sin(frame * 0.008 + ring) * 5;
-        ctx.globalAlpha = 0.12 - ring * 0.016;
-        ctx.beginPath();
-        ctx.arc(rootX, rootY, radius, frame * 0.003 + ring, Math.PI * 1.38 + frame * 0.003 + ring);
-        ctx.stroke();
-      }
-      ctx.restore();
-
-      ctx.save();
-      ctx.globalCompositeOperation = 'source-over';
-      const vignette = ctx.createRadialGradient(width / 2, height / 2, Math.min(width, height) * 0.2, width / 2, height / 2, Math.max(width, height) * 0.72);
-      vignette.addColorStop(0, 'rgba(5, 5, 6, 0)');
-      vignette.addColorStop(0.72, 'rgba(5, 5, 6, 0.1)');
-      vignette.addColorStop(1, 'rgba(5, 5, 6, 0.66)');
-      ctx.fillStyle = vignette;
-      ctx.fillRect(0, 0, width, height);
-
-      ctx.globalAlpha = 0.38;
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.025)';
-      for (let row = 0; row < height; row += 3) {
-        ctx.fillRect(0, row, width, 1);
-      }
-      ctx.restore();
-    };
-
-    const drawEdge = (source: RenderNode, target: RenderNode, index: number) => {
-      const selected = pointerRef.current.hoverId === source.id || pointerRef.current.hoverId === target.id;
-      const pulse = Math.sin(frame * 0.026 + index * 0.9) * 0.5 + 0.5;
-
-      ctx.save();
-      ctx.globalAlpha = selected ? 0.88 : 0.32 + pulse * 0.12;
-      ctx.strokeStyle = target.color;
-      ctx.lineWidth = target.kind === 'client' ? 1 : 1.35;
-      ctx.beginPath();
-      ctx.moveTo(source.x, source.y);
-      const cx = (source.x + target.x) / 2 + Math.sin(frame * 0.01 + index) * 16;
-      const cy = (source.y + target.y) / 2 + Math.cos(frame * 0.012 + index) * 12;
-      ctx.quadraticCurveTo(cx, cy, target.x, target.y);
-      ctx.stroke();
-      ctx.restore();
-    };
-
-    const drawSignal = (signal: Signal, nodeMap: Map<string, RenderNode>) => {
-      const link = links[signal.linkIndex % links.length];
-      const source = nodeMap.get(link.source);
-      const target = nodeMap.get(link.target);
-      if (!source || !target) return;
-
-      const t = signal.progress;
-      const x = source.x + (target.x - source.x) * t;
-      const y = source.y + (target.y - source.y) * t;
-
-      ctx.save();
-      ctx.globalAlpha = signal.alpha;
-      ctx.fillStyle = target.color;
-      ctx.shadowColor = target.color;
-      ctx.shadowBlur = 16;
-      ctx.beginPath();
-      ctx.arc(x, y, signal.size, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-    };
-
-    const drawNode = (node: RenderNode) => {
-      const hovered = node.id === pointerRef.current.hoverId;
-      const pulse = Math.sin(frame * 0.036 + node.tx * 0.01) * 0.5 + 0.5;
-      const radius = node.radius + (hovered ? 6 : 0);
-
-      ctx.save();
-      ctx.globalAlpha = node.kind === 'client' ? 0.24 + pulse * 0.1 : 0.28 + pulse * 0.14;
-      ctx.strokeStyle = node.color;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.arc(node.x, node.y, radius + 14 + pulse * 9, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
-
-      ctx.save();
-      ctx.shadowColor = node.color;
-      ctx.shadowBlur = hovered ? 32 : node.kind === 'root' ? 30 : 14;
-      ctx.fillStyle = node.kind === 'root' ? '#0a0a0b' : '#111113';
-      ctx.strokeStyle = node.color;
-      ctx.lineWidth = hovered ? 2.4 : node.kind === 'root' ? 1.8 : 1.2;
-      ctx.beginPath();
-      ctx.arc(node.x, node.y, radius, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-      ctx.restore();
-
-      if (node.kind === 'root') {
-        ctx.save();
-        ctx.strokeStyle = node.color;
-        ctx.globalAlpha = hovered ? 0.72 : 0.52;
-        ctx.lineWidth = 1;
-        ctx.setLineDash([2, 8]);
-        ctx.beginPath();
-        ctx.arc(node.x, node.y, radius + 24, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.setLineDash([]);
-
-        const tick = radius + 18;
-        const tickLong = radius + 29;
-        ctx.globalAlpha = hovered ? 0.9 : 0.66;
-        ctx.beginPath();
-        ctx.moveTo(node.x, node.y - tick);
-        ctx.lineTo(node.x, node.y - tickLong);
-        ctx.moveTo(node.x + tick, node.y);
-        ctx.lineTo(node.x + tickLong, node.y);
-        ctx.moveTo(node.x, node.y + tick);
-        ctx.lineTo(node.x, node.y + tickLong);
-        ctx.moveTo(node.x - tick, node.y);
-        ctx.lineTo(node.x - tickLong, node.y);
-        ctx.stroke();
-        ctx.restore();
-
-        ctx.save();
-        ctx.strokeStyle = hovered ? node.color : node.accent;
-        ctx.fillStyle = hovered ? '#fff7ed' : node.color;
-        ctx.lineWidth = 1.4;
-
-        const markSize = radius * 0.7;
-        const left = node.x - markSize / 2;
-        const top = node.y - markSize / 2;
-        const corner = markSize * 0.24;
-
-        ctx.beginPath();
-        ctx.moveTo(left, top + corner);
-        ctx.lineTo(left, top);
-        ctx.lineTo(left + corner, top);
-        ctx.moveTo(left + markSize - corner, top);
-        ctx.lineTo(left + markSize, top);
-        ctx.lineTo(left + markSize, top + corner);
-        ctx.moveTo(left + markSize, top + markSize - corner);
-        ctx.lineTo(left + markSize, top + markSize);
-        ctx.lineTo(left + markSize - corner, top + markSize);
-        ctx.moveTo(left + corner, top + markSize);
-        ctx.lineTo(left, top + markSize);
-        ctx.lineTo(left, top + markSize - corner);
-        ctx.stroke();
-
-        ctx.font = `700 ${Math.max(16, radius * 0.42)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'alphabetic';
-        const textMetrics = ctx.measureText('JD');
-        const textY =
-          node.y +
-          (textMetrics.actualBoundingBoxAscent - textMetrics.actualBoundingBoxDescent) / 2;
-        ctx.fillText('JD', node.x, textY);
-        ctx.restore();
-      } else if (node.imageReady && node.image) {
-        ctx.save();
-        ctx.beginPath();
-        ctx.arc(node.x, node.y, Math.max(8, radius - (node.logoSrc ? 4 : 6)), 0, Math.PI * 2);
-        ctx.clip();
-        const imageSize = Math.max(12, radius * (node.logoSrc ? 1.82 : 1.22));
-        ctx.drawImage(node.image, node.x - imageSize / 2, node.y - imageSize / 2, imageSize, imageSize);
-        ctx.restore();
-      } else {
-        ctx.save();
-        ctx.fillStyle = hovered ? node.accent : node.color;
-        const nodeText = node.kind === 'client' ? node.shortName.slice(0, 6) : node.shortName.slice(0, 2);
-        const fontSize = node.kind === 'client' ? (nodeText.length > 4 ? 8 : 10) : node.kind === 'venture' ? 12 : 15;
-        ctx.font = `${fontSize}px ui-monospace, SFMono-Regular, Menlo, monospace`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(nodeText || getInitials(node.name), node.x, node.y + 0.5);
-        ctx.restore();
-      }
-
-      if (node.kind === 'client') {
-        ctx.save();
-        ctx.fillStyle = hovered ? '#fff7ed' : 'rgba(244, 240, 232, 0.72)';
-        ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'top';
-        ctx.fillText(getTenureToken(node), node.x, node.y + radius + 7);
-        ctx.restore();
-      }
-
-      if (hovered) {
-        const text = node.kind === 'client' ? `${node.name} · ${getTenureToken(node)}` : node.name;
-        ctx.save();
-        ctx.font = '12px ui-monospace, SFMono-Regular, Menlo, monospace';
-        const textWidth = ctx.measureText(text).width;
-        const labelX = Math.max(12, Math.min(width - textWidth - 26, node.x - textWidth / 2 - 13));
-        const labelY = Math.max(12, node.y - radius - 42);
-        ctx.fillStyle = 'rgba(10, 10, 11, 0.88)';
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.16)';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.roundRect(labelX, labelY, textWidth + 26, 27, 7);
-        ctx.fill();
-        ctx.stroke();
-        ctx.fillStyle = '#fff7ed';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(text, labelX + 13, labelY + 14);
-        ctx.restore();
-      }
-    };
-
     const animate = () => {
       frame += 1;
-      placeTargets(nodesRef.current, width, height);
-      ensureSignals();
+      updateGame(playerRef.current, blocksRef.current, sparksRef.current, frame);
 
-      const nodeMap = new Map(nodesRef.current.map((node) => [node.id, node]));
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.imageSmoothingEnabled = false;
+      pixelRect(ctx, 0, 0, width, height, '#030303');
 
-      nodesRef.current.forEach((node, index) => {
-        const dx = node.tx - node.x;
-        const dy = node.ty - node.y;
-        const idleX = Math.sin(frame * 0.012 + index * 1.7) * 0.22;
-        const idleY = Math.cos(frame * 0.011 + index * 1.35) * 0.18;
+      const viewport = viewportRef.current;
+      ctx.save();
+      ctx.translate(viewport.x, viewport.y);
+      ctx.scale(viewport.scale, viewport.scale);
+      ctx.beginPath();
+      ctx.rect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+      ctx.clip();
+      drawScene(ctx, blocksRef.current, playerRef.current, sparksRef.current, frame);
+      ctx.restore();
 
-        node.vx = (node.vx + dx * 0.022 + idleX) * 0.82;
-        node.vy = (node.vy + dy * 0.022 + idleY) * 0.82;
-        node.x += node.vx;
-        node.y += node.vy;
-      });
-
-      drawBackground(nodeMap);
-
-      links.forEach((link, index) => {
-        const source = nodeMap.get(link.source);
-        const target = nodeMap.get(link.target);
-        if (source && target) drawEdge(source, target, index);
-      });
-
-      signalsRef.current.forEach((signal) => {
-        signal.progress += signal.speed;
-        if (signal.progress > 1) {
-          signal.progress = 0;
-          signal.linkIndex = Math.floor(Math.random() * links.length);
-        }
-        drawSignal(signal, nodeMap);
-      });
-
-      nodesRef.current
-        .slice()
-        .sort((a, b) => a.radius - b.radius)
-        .forEach(drawNode);
+      ctx.save();
+      ctx.strokeStyle = '#151515';
+      ctx.lineWidth = Math.max(10, 16 * viewport.scale);
+      ctx.strokeRect(viewport.x, viewport.y, viewport.width, viewport.height);
+      ctx.restore();
 
       animation = requestAnimationFrame(animate);
     };
@@ -617,38 +597,26 @@ function NetworkOnly() {
   }, []);
 
   const handlePointerMove = (event: PointerEvent<HTMLCanvasElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
-    let hoverId = '';
-
-    for (const node of nodesRef.current) {
-      const dx = x - node.x;
-      const dy = y - node.y;
-      const distance = Math.sqrt(dx * dx + dy * dy);
-      if (distance <= node.radius + 14) {
-        hoverId = node.id;
-        break;
-      }
-    }
-
-    pointerRef.current = { x, y, hoverId };
+    const pointer = pointerToWorld(event, viewportRef.current);
+    playerRef.current.targetX = pointer.x;
   };
 
-  const handlePointerLeave = () => {
-    pointerRef.current = { x: -1000, y: -1000, hoverId: '' };
+  const handlePointerDown = (event: PointerEvent<HTMLCanvasElement>) => {
+    const pointer = pointerToWorld(event, viewportRef.current);
+    playerRef.current.targetX = pointer.x;
+    playerRef.current.jumpQueued = true;
   };
 
-  const clientSummary = clientNodes
-    .map((node) => `${node.name}, ${getTenureToken(node)}`)
+  const clientSummary = branchOrder
+    .map((branchId) => `${branchLabels[branchId]}: ${clientNodes.filter((client) => client.branchId === branchId).length}`)
     .join('; ');
 
   return (
-    <main className="network-page" aria-label={`JD Builds active client network: ${clientSummary}`}>
+    <main className="game-page" aria-label={`Interactive 8-bit JD Builds client game. ${clientSummary}`}>
       <canvas
         ref={canvasRef}
         onPointerMove={handlePointerMove}
-        onPointerLeave={handlePointerLeave}
+        onPointerDown={handlePointerDown}
         aria-hidden="true"
       />
     </main>
@@ -656,5 +624,5 @@ function NetworkOnly() {
 }
 
 export default function App() {
-  return <NetworkOnly />;
+  return <PixelClientsGame />;
 }
