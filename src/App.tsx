@@ -8,7 +8,7 @@ const BLOCK_SIZE = 52;
 const PLAYER_HEIGHT = 58;
 const PLAYER_HALF_WIDTH = 18;
 const GRAVITY = 0.78;
-const JUMP_VELOCITY = -22.2;
+const JUMP_VELOCITY = -21.1;
 const LEDGE_X = 398;
 const LEDGE_Y = 464;
 const LEDGE_WIDTH = 5 * 48;
@@ -35,6 +35,7 @@ interface GameBlock {
   imageReady: boolean;
   hitFrames: number;
   revealUntil: number;
+  openedAt: number;
 }
 
 interface Player {
@@ -122,6 +123,7 @@ function createBlock(id: BranchId, x: number, y: number): GameBlock {
     imageReady: false,
     hitFrames: 0,
     revealUntil: 0,
+    openedAt: 0,
   };
 
   if (image && logoUrl) {
@@ -347,7 +349,6 @@ function drawRevealPanel(ctx: CanvasRenderingContext2D, block: GameBlock, frame:
   const x = clamp(block.x + BLOCK_SIZE / 2 - panelWidth / 2, 18, WORLD_WIDTH - panelWidth - 18);
   const aboveY = block.y - panelHeight - 26;
   const y = aboveY > 76 ? aboveY : block.y + BLOCK_SIZE + 22;
-  const shimmer = Math.sin(frame * 0.18) * 0.5 + 0.5;
 
   ctx.save();
   ctx.globalAlpha = Math.min(1, visibleFrames / 22);
@@ -365,7 +366,6 @@ function drawRevealPanel(ctx: CanvasRenderingContext2D, block: GameBlock, frame:
     pixelText(ctx, getTenureToken(client), x + panelWidth - 18, rowY, 14, '#ffdf7d', 'right');
   });
 
-  pixelRect(ctx, x + Math.floor(panelWidth * shimmer) - 12, y + 5, 5, panelHeight - 10, 'rgba(255, 248, 239, 0.18)');
   ctx.restore();
 }
 
@@ -417,7 +417,10 @@ function drawScene(ctx: CanvasRenderingContext2D, blocks: GameBlock[], player: P
   for (let i = 0; i < 5; i += 1) drawBrick(ctx, LEDGE_X + i * 48, LEDGE_Y, 48, 30);
 
   blocks.forEach((block) => drawQuestionBlock(ctx, block, frame));
-  blocks.forEach((block) => drawRevealPanel(ctx, block, frame));
+  blocks
+    .slice()
+    .sort((a, b) => a.openedAt - b.openedAt)
+    .forEach((block) => drawRevealPanel(ctx, block, frame));
 
   sparks.forEach((spark) => {
     const alpha = spark.life / spark.maxLife;
@@ -480,6 +483,7 @@ function updateGame(player: Player, blocks: GameBlock[], sparks: Spark[], frame:
       player.vy = 5.4;
       block.hitFrames = 14;
       block.revealUntil = frame + 430;
+      block.openedAt = frame;
       addBlockSparks(sparks, block);
     });
   }
