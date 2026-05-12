@@ -32,7 +32,7 @@ interface FieldParticle {
 }
 
 const branchOrder = ['ref-buddy', 'harvestingpro', 'league-hub'] as const;
-const backgroundPalette = ['#fff7ed', '#fbbf7a', '#ff7a1a', '#6ee79a', '#b98cff'];
+const backgroundPalette = ['#fff2b4', '#ffe073', '#f05a3c', '#58d654', '#54b7f7', '#8ccf4f'];
 const fieldParticles: FieldParticle[] = Array.from({ length: 142 }, (_, index) => ({
   seed: index * 17.831,
   orbit: 0.08 + seededUnit(index, 1) * 0.86,
@@ -269,7 +269,7 @@ function NetworkOnly() {
     };
 
     const drawBackground = (nodeMap: Map<string, RenderNode>) => {
-      ctx.fillStyle = '#050506';
+      ctx.fillStyle = '#06110a';
       ctx.fillRect(0, 0, width, height);
 
       ctx.save();
@@ -280,8 +280,8 @@ function NetworkOnly() {
           const scale = node.kind === 'root' ? 0.38 : 0.25;
           const glowRadius = Math.max(width, height) * scale;
           const gradient = ctx.createRadialGradient(node.x, node.y, 0, node.x, node.y, glowRadius);
-          gradient.addColorStop(0, `${node.color}24`);
-          gradient.addColorStop(0.26, `${node.color}10`);
+          gradient.addColorStop(0, `${node.color}22`);
+          gradient.addColorStop(0.3, `${node.color}0f`);
           gradient.addColorStop(1, `${node.color}00`);
           ctx.fillStyle = gradient;
           ctx.fillRect(0, 0, width, height);
@@ -305,7 +305,7 @@ function NetworkOnly() {
         const amplitude = height * (0.018 + seededUnit(strand, 8) * 0.052);
         const magnet = 0.08 + seededUnit(strand, 9) * 0.1;
 
-        ctx.globalAlpha = 0.032 + seededUnit(strand, 10) * 0.056;
+        ctx.globalAlpha = 0.028 + seededUnit(strand, 10) * 0.052;
         ctx.strokeStyle = color;
         ctx.lineWidth = 0.55 + seededUnit(strand, 11) * 1.15;
         ctx.beginPath();
@@ -360,7 +360,7 @@ function NetworkOnly() {
 
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
-      ctx.strokeStyle = 'rgba(255, 247, 237, 0.11)';
+      ctx.strokeStyle = 'rgba(255, 242, 180, 0.12)';
       ctx.lineWidth = 0.8;
       for (let ring = 0; ring < 5; ring += 1) {
         const radius = 92 + ring * 58 + Math.sin(frame * 0.008 + ring) * 5;
@@ -374,14 +374,14 @@ function NetworkOnly() {
       ctx.save();
       ctx.globalCompositeOperation = 'source-over';
       const vignette = ctx.createRadialGradient(width / 2, height / 2, Math.min(width, height) * 0.2, width / 2, height / 2, Math.max(width, height) * 0.72);
-      vignette.addColorStop(0, 'rgba(5, 5, 6, 0)');
-      vignette.addColorStop(0.72, 'rgba(5, 5, 6, 0.1)');
-      vignette.addColorStop(1, 'rgba(5, 5, 6, 0.66)');
+      vignette.addColorStop(0, 'rgba(6, 17, 10, 0)');
+      vignette.addColorStop(0.72, 'rgba(6, 17, 10, 0.14)');
+      vignette.addColorStop(1, 'rgba(6, 17, 10, 0.7)');
       ctx.fillStyle = vignette;
       ctx.fillRect(0, 0, width, height);
 
       ctx.globalAlpha = 0.38;
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.025)';
+      ctx.fillStyle = 'rgba(255, 242, 180, 0.022)';
       for (let row = 0; row < height; row += 3) {
         ctx.fillRect(0, row, width, 1);
       }
@@ -443,7 +443,7 @@ function NetworkOnly() {
       ctx.save();
       ctx.shadowColor = node.color;
       ctx.shadowBlur = hovered ? 32 : node.kind === 'root' ? 30 : 14;
-      ctx.fillStyle = node.kind === 'root' ? '#0a0a0b' : '#111113';
+      ctx.fillStyle = node.kind === 'root' ? '#07120d' : '#0b1710';
       ctx.strokeStyle = node.color;
       ctx.lineWidth = hovered ? 2.4 : node.kind === 'root' ? 1.8 : 1.2;
       ctx.beginPath();
@@ -480,7 +480,7 @@ function NetworkOnly() {
 
         ctx.save();
         ctx.strokeStyle = hovered ? node.color : node.accent;
-        ctx.fillStyle = hovered ? '#fff7ed' : node.color;
+        ctx.fillStyle = hovered ? '#fff2b4' : node.color;
         ctx.lineWidth = 1.4;
 
         const markSize = radius * 0.7;
@@ -534,7 +534,7 @@ function NetworkOnly() {
 
       if (node.kind === 'client') {
         ctx.save();
-        ctx.fillStyle = hovered ? '#fff7ed' : 'rgba(244, 240, 232, 0.72)';
+        ctx.fillStyle = hovered ? '#fff2b4' : 'rgba(255, 242, 180, 0.74)';
         ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
@@ -549,14 +549,14 @@ function NetworkOnly() {
         const textWidth = ctx.measureText(text).width;
         const labelX = Math.max(12, Math.min(width - textWidth - 26, node.x - textWidth / 2 - 13));
         const labelY = Math.max(12, node.y - radius - 42);
-        ctx.fillStyle = 'rgba(10, 10, 11, 0.88)';
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.16)';
+        ctx.fillStyle = 'rgba(6, 17, 10, 0.9)';
+        ctx.strokeStyle = 'rgba(255, 242, 180, 0.18)';
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.roundRect(labelX, labelY, textWidth + 26, 27, 7);
         ctx.fill();
         ctx.stroke();
-        ctx.fillStyle = '#fff7ed';
+        ctx.fillStyle = '#fff2b4';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
         ctx.fillText(text, labelX + 13, labelY + 14);
