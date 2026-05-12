@@ -361,7 +361,7 @@ function drawRevealPanel(ctx: CanvasRenderingContext2D, block: GameBlock, frame:
 
   clients.forEach((client, index) => {
     const rowY = y + 42 + index * 24;
-    pixelRect(ctx, x + 16, rowY + 7, 8, 8, index % 2 === 0 ? block.node.color : block.node.accent);
+    pixelRect(ctx, x + 16, rowY + 4, 8, 8, index % 2 === 0 ? block.node.color : block.node.accent);
     pixelText(ctx, client.shortName, x + 32, rowY, 14, '#fff8ef');
     pixelText(ctx, getTenureToken(client), x + panelWidth - 18, rowY, 14, '#ffdf7d', 'right');
   });
